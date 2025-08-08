@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="bs">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Mini Liga</title>
+<style>
+  :root { font-family: system-ui, Arial, sans-serif; }
+  body { margin: 0; padding: 0 12px 40px; background:#fff; color:#222; }
+  header { display:flex; justify-content:space-between; align-items:center; padding:12px 0; }
+  h1 { font-size: 1.2rem; margin: 0; }
+  .grid { display:grid; gap:12px; grid-template-columns: 1fr; }
+  @media (min-width:900px){ .grid{ grid-template-columns: 2fr 1fr;} }
+  section { border:1px solid #ddd; border-radius:12px; padding:12px; background:#fff; }
+  section h2 { margin:0 0 8px 0; font-size:1rem; display:flex; align-items:center; gap:8px;}
+  table { width:100%; border-collapse: collapse; }
+  th, td { padding:6px; border-bottom:1px solid #eee; text-align:left; font-size:0.95rem;}
+  th { background:#fafafa; position:sticky; top:0; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  /* Stack certain rows vertically on small screens so buttons don't disappear */
+  .stack-sm { display:flex; gap:8px; }
+  @media (max-width:700px){
+    .stack-sm{ flex-direction:column; align-items:stretch; }
+    .stack-sm > *{ width:100%; }
+  }
+  input, select, button { padding:10px; font-size:1rem; }
+  input, select { border:1px solid #ccc; border-radius:8px; }
+  button { border:1px solid #ccc; border-radius:8px; background:#f5f5f5; }
+  .danger { background:#e53935; color:#fff; border:none; }
+  .ok { background:#2e7d32; color:#fff; border:none; }
+  .muted { color:#666; font-size:0.9rem; }
+  .pill { display:inline-block; padding:4px 10px; border-radius:999px; background:#f0f0f0; font-size:1rem; min-width:80px; text-align:center; }
+  .admin-only { display:none; }
+  .live { font-weight:600; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>📋 Dječija fudbalska liga — mini app</h1>
+    <div id="adminBar" class="row">
+      <span id="adminStatus" class="muted">Nisi prijavljen</span>
+      <input id="pinInput" type="password" placeholder="Admin PIN" />
+      <button id="btnLogin">Prijava</button>
+      <button id="btnLogout" class="danger" style="display:none;">Odjava</button>
+    </div>
+  </header>
+
+  <div class="grid">
+    <section id="standingsSec">
+      <h2>📊 Tabela</h2>
+      <div class="row stack-sm">
+        <input id="teamName" placeholder="Novi tim (npr. 'Pjetlići A')" />
+        <button id="addTeam" class="ok admin-only">Dodaj tim</button>
+        <button id="resetData" class="danger admin-only">Resetuj sve</button>
+      </div>
+      <div class="muted">Tabela se automatski računa iz odigranih utakmica.</div>
+      <table id="standingsTbl">
+        <thead><tr>
+          <th>#</th><th>Tim</th><th>U</th><th>P</th><th>N</th><th>I</th><th>DG</th><th>DP</th><th>GR</th><th>Bod</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section id="liveSec">
+      <h2>🔴 Trenutna utakmica</h2>
+      <div id="noLive" class="muted">Nema aktivne utakmice.</div>
+      <div id="livePanel" style="display:none;">
+        <div id="liveNames" class="live"></div>
+        <div class="row" style="align-items:center;">
+          <button class="ok admin-only" id="homePlus">+1 domaćin</button>
+          <span class="pill" id="liveScore">0 : 0</span>
+          <button class="ok admin-only" id="awayPlus">+1 gost</button>
+        </div>
+        <div class="row admin-only">
+          <button id="undoGoal">↩️ Poništi gol</button>
+          <button id="endMatch" class="danger">Završi utakmicu</button>
+        </div>
+      </div>
+
+      <div class="admin-only">
+        <h3>📅 Zakaži novu utakmicu</h3>
+        <div class="row stack-sm">
+          <select id="homeSel"></select>
+          <select id="awaySel"></select>
+          <input id="kickoff" type="datetime-local" />
+          <button id="scheduleBtn" class="ok">Zakaži</button>
+        </div>
+        <h3>▶️ Pokreni zakazanu</h3>
+        <div class="row stack-sm">
+          <select id="scheduledSel"></select>
+          <button id="startBtn" class="ok">Započni</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <section id="fixturesSec">
+    <h2>🗓️ Raspored</h2>
+    <ul id="fixturesList"></ul>
+  </section>
+
+  <section id="resultsSec">
+    <h2>✅ Rezultati</h2>
+    <ul id="resultsList"></ul>
+  </section>
+
+<script>
+const ADMIN_PIN = "1234";
+
+const store = {
+  load(){ try { return JSON.parse(localStorage.getItem("miniLiga")) || null; } catch{ return null; } },
+  save(data){ localStorage.setItem("miniLiga", JSON.stringify(data)); }
+};
+
+const nowISO = () => new Date().toISOString().slice(0,16);
+
+const blank = () => ({
+  teams: [],
+  matches: [],
+  liveId: null
+});
+
+let db = store.load() || blank();
+let isAdmin = false;
+
+const els = {
+  standingsBody: document.querySelector("#standingsTbl tbody"),
+  teamName: document.querySelector("#teamName"),
+  addTeam: document.querySelector("#addTeam"),
+  resetData: document.querySelector("#resetData"),
+  homeSel: document.querySelector("#homeSel"),
+  awaySel: document.querySelector("#awaySel"),
+  kickoff: document.querySelector("#kickoff"),
+  scheduleBtn: document.querySelector("#scheduleBtn"),
+  scheduledSel: document.querySelector("#scheduledSel"),
+  startBtn: document.querySelector("#startBtn"),
+  fixturesList: document.querySelector("#fixturesList"),
+  resultsList: document.querySelector("#resultsList"),
+  noLive: document.querySelector("#noLive"),
+  livePanel: document.querySelector("#livePanel"),
+  liveNames: document.querySelector("#liveNames"),
+  liveScore: document.querySelector("#liveScore"),
+  homePlus: document.querySelector("#homePlus"),
+  awayPlus: document.querySelector("#awayPlus"),
+  undoGoal: document.querySelector("#undoGoal"),
+  endMatch: document.querySelector("#endMatch"),
+  adminStatus: document.querySelector("#adminStatus"),
+  pinInput: document.querySelector("#pinInput"),
+  btnLogin: document.querySelector("#btnLogin"),
+  btnLogout: document.querySelector("#btnLogout"),
+};
+
+function uid(){ return Math.random().toString(36).slice(2,10); }
+function byId(arr,id){ return arr.find(x=>x.id===id); }
+
+function computeStandings(){
+  const map = new Map();
+  db.teams.forEach(t=>map.set(t.id, { team:t, P:0,N:0,I:0,U:0,DG:0,DP:0,GR:0,Bod:0 }));
+  db.matches.filter(m=>m.status==="finished").forEach(m=>{
+    const A = map.get(m.homeId), B = map.get(m.awayId);
+    A.U++; B.U++;
+    A.DG+=m.homeGoals; A.DP+=m.awayGoals; A.GR=A.DG-A.DP;
+    B.DG+=m.awayGoals; B.DP+=m.homeGoals; B.GR=B.DG-B.DP;
+    if(m.homeGoals>m.awayGoals){ A.P++; B.I++; A.Bod+=3; }
+    else if(m.homeGoals<m.awayGoals){ B.P++; A.I++; B.Bod+=3; }
+    else { A.N++; B.N++; A.Bod+=1; B.Bod+=1; }
+  });
+  return Array.from(map.values()).sort((a,b)=>
+    b.Bod-a.Bod || b.GR-a.GR || b.DG-a.DG || a.team.name.localeCompare(b.team.name)
+  );
+}
+
+function render(){
+  document.querySelectorAll(".admin-only").forEach(el=>{
+    el.style.display = isAdmin ? "" : "none";
+  });
+  els.btnLogin.style.display = isAdmin ? "none":"";
+  els.btnLogout.style.display = isAdmin ? "": "none";
+  els.pinInput.style.display = isAdmin ? "none":"";
+  els.adminStatus.textContent = isAdmin ? "Admin" : "Nisi prijavljen";
+
+  const st = computeStandings();
+  els.standingsBody.innerHTML = st.map((s,i)=>`
+    <tr>
+      <td>${i+1}</td><td>${s.team.name}</td><td>${s.U}</td><td>${s.P}</td><td>${s.N}</td><td>${s.I}</td>
+      <td>${s.DG}</td><td>${s.DP}</td><td>${s.GR}</td><td>${s.Bod}</td>
+    </tr>
+  `).join("");
+
+  const teamOpts = db.teams.map(t=>`<option value="${t.id}">${t.name}</option>`).join("");
+  els.homeSel.innerHTML = `<option value="">Domaćin</option>`+teamOpts;
+  els.awaySel.innerHTML = `<option value="">Gost</option>`+teamOpts;
+
+  const fixtures = db.matches.filter(m=>m.status==="scheduled")
+    .sort((a,b)=>a.koISO.localeCompare(b.koISO));
+  els.scheduledSel.innerHTML = fixtures.map(m=>{
+    const h = byId(db.teams,m.homeId)?.name || "???";
+    const a = byId(db.teams,m.awayId)?.name || "???";
+    return `<option value="${m.id}">${h} vs ${a} — ${m.koISO.replace('T',' ')}</option>`;
+  }).join("");
+  els.fixturesList.innerHTML = fixtures.map(m=>{
+    const h = byId(db.teams,m.homeId)?.name, a = byId(db.teams,m.awayId)?.name;
+    return `<li>${h} vs ${a} — <span class="muted">${m.koISO.replace('T',' ')}</span></li>`;
+  }).join("") || "<li class='muted'>Nema zakazanih.</li>";
+
+  const results = db.matches.filter(m=>m.status==="finished")
+    .sort((a,b)=>b.koISO.localeCompare(a.koISO));
+  els.resultsList.innerHTML = results.map(m=>{
+    const h = byId(db.teams,m.homeId)?.name, a = byId(db.teams,m.awayId)?.name;
+    return `<li>${h} ${m.homeGoals} : ${m.awayGoals} ${a} — <span class="muted">${m.koISO.replace('T',' ')}</span></li>`;
+  }).join("") || "<li class='muted'>Još nema odigranih utakmica.</li>";
+
+  if(db.liveId){
+    const m = byId(db.matches, db.liveId);
+    const h = byId(db.teams,m.homeId)?.name, a = byId(db.teams,m.awayId)?.name;
+    els.noLive.style.display = "none";
+    els.livePanel.style.display = "";
+    els.liveNames.textContent = `${h} vs ${a}`;
+    els.liveScore.textContent = `${m.homeGoals} : ${m.awayGoals}`;
+  } else {
+    els.noLive.style.display = "";
+    els.livePanel.style.display = "none";
+  }
+
+  store.save(db);
+}
+
+els.addTeam.onclick = ()=>{
+  const name = els.teamName.value.trim();
+  if(!name) return;
+  db.teams.push({id:uid(), name});
+  els.teamName.value="";
+  render();
+};
+els.resetData.onclick = ()=>{
+  if(confirm("Resetovati SVE podatke?")){ db = blank(); render(); }
+};
+els.scheduleBtn.onclick = ()=>{
+  const h = els.homeSel.value, a = els.awaySel.value, ko = els.kickoff.value || nowISO();
+  if(!h || !a || h===a) return alert("Odaberi različite timove.");
+  db.matches.push({id:uid(), homeId:h, awayId:a, koISO:ko, status:"scheduled", homeGoals:0, awayGoals:0, goalLog:[]});
+  render();
+};
+els.startBtn.onclick = ()=>{
+  const id = els.scheduledSel.value;
+  if(!id) return;
+  if(db.liveId) return alert("Već je aktivna utakmica.");
+  const m = byId(db.matches,id);
+  m.status="live"; db.liveId=m.id;
+  render();
+};
+els.homePlus.onclick = ()=>{ addGoal("home"); };
+els.awayPlus.onclick = ()=>{ addGoal("away"); };
+els.undoGoal.onclick = ()=>{
+  const m = byId(db.matches, db.liveId);
+  if(!m || !m.goalLog.length) return;
+  const last = m.goalLog.pop();
+  if(last==="home") m.homeGoals--; else m.awayGoals--;
+  render();
+};
+els.endMatch.onclick = ()=>{
+  if(!db.liveId) return;
+  const m = byId(db.matches, db.liveId);
+  m.status="finished"; db.liveId=null;
+  render();
+};
+function addGoal(side){
+  const m = byId(db.matches, db.liveId);
+  if(!m) return;
+  if(side==="home") m.homeGoals++; else m.awayGoals++;
+  m.goalLog.push(side);
+  render();
+}
+
+els.btnLogin.onclick = ()=>{
+  const pin = els.pinInput.value.trim();
+  if(pin===ADMIN_PIN){ isAdmin=true; els.pinInput.value=""; }
+  else alert("Pogrešan PIN.");
+  render();
+};
+els.btnLogout.onclick = ()=>{ isAdmin=false; render(); };
+
+if(!db.teams.length){
+  db.teams = [
+    {id:uid(), name:"Školarci A"},
+    {id:uid(), name:"Školarci B"},
+    {id:uid(), name:"Pjetlići"},
+    {id:uid(), name:"Lavovi"}
+  ];
+}
+els.kickoff.value = nowISO();
+render();
+</script>
+</body>
+</html>
